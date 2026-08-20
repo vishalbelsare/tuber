@@ -8,7 +8,9 @@ upload_video(
   file,
   snippet = NULL,
   status = list(privacyStatus = "public"),
-  query = NULL,
+  notify_subscribers = TRUE,
+  on_behalf_of_content_owner = NULL,
+  content_owner_channel_id = NULL,
   open_url = FALSE,
   ...
 )
@@ -26,15 +28,21 @@ options for `status` are `license` (which should hold:
 `creativeCommon`, or `youtube`), `privacyStatus`, `publicStatsViewable`,
 `publishAt`.}
 
-\item{query}{Fields for `query` in `POST`}
+\item{notify_subscribers}{Whether YouTube should notify subscribers about
+the new video.}
+
+\item{on_behalf_of_content_owner}{Optional YouTube content-owner ID. This is
+only available to authorized YouTube content partners.}
+
+\item{content_owner_channel_id}{Optional channel ID for a content
+partner upload. This must be supplied with `on_behalf_of_content_owner`.}
 
 \item{open_url}{Should the video be opened using \code{\link{browseURL}}}
 
-\item{...}{Additional arguments to send to \code{\link{tuber_POST}} and
-therefore \code{\link{POST}}}
+\item{...}{Ignored; retained for backward compatibility.}
 }
 \value{
-A list of the response object from the \code{POST}, content,
+A list of the response object, content,
 and the URL of the uploaded
 }
 \description{
@@ -51,10 +59,12 @@ automatically detected by the names of `body`.
 See \url{https://developers.google.com/youtube/v3/docs/videos/insert#usage}
 }
 \examples{
+\dontrun{
 snippet = list(
-title = "Test Video",
-description = "This is just a random test.",
-tags = c("r language", "r programming", "data analysis")
+  title = "Test Video",
+  description = "This is just a random test.",
+  tags = c("r language", "r programming", "data analysis")
 )
 status = list(privacyStatus = "private")
+}
 }

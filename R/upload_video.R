@@ -9,9 +9,13 @@
 #' options for `status` are `license` (which should hold:
 #' `creativeCommon`, or `youtube`), `privacyStatus`, `publicStatsViewable`,
 #' `publishAt`.
-#' @param query Fields for `query` in `POST`
-#' @param ... Additional arguments to send to \code{\link{tuber_POST}} and
-#' therefore \code{\link{POST}}
+#' @param notify_subscribers Whether YouTube should notify subscribers about
+#'   the new video.
+#' @param on_behalf_of_content_owner Optional YouTube content-owner ID. This is
+#'   only available to authorized YouTube content partners.
+#' @param content_owner_channel_id Optional channel ID for a content
+#'   partner upload. This must be supplied with `on_behalf_of_content_owner`.
+#' @param ... Ignored; retained for backward compatibility.
 #' @param open_url Should the video be opened using \code{\link{browseURL}}
 #'
 #' @note The information for `status` and `snippet` are at
@@ -22,37 +26,87 @@
 #' It identifies the properties that the write operation will set, this will be
 #' automatically detected by the names of `body`.
 #' See \url{https://developers.google.com/youtube/v3/docs/videos/insert#usage}
-#' @return A list of the response object from the \code{POST}, content,
+#' @return A list of the response object, content,
 #' and the URL of the uploaded
 #' @export
 #'
-#' @importFrom jsonlite toJSON
 #' @importFrom utils browseURL
-#' @importFrom httr upload_file
+#' @importFrom mime guess_type
 #' @examples
+#' \dontrun{
 #' snippet = list(
-#' title = "Test Video",
-#' description = "This is just a random test.",
-#' tags = c("r language", "r programming", "data analysis")
+#'   title = "Test Video",
+#'   description = "This is just a random test.",
+#'   tags = c("r language", "r programming", "data analysis")
 #' )
 #' status = list(privacyStatus = "private")
-
+#' }
 upload_video <- function(
   file,
   snippet = NULL,
   status = list(privacyStatus = "public"),
-  query = NULL,
+  notify_subscribers = TRUE,
+  on_behalf_of_content_owner = NULL,
+  content_owner_channel_id = NULL,
   open_url = FALSE,
   ...
 ) {
+  # Modern validation using checkmate
+  assert_character(file, len = 1, min.chars = 1, .var.name = "file")
+  assert_logical(notify_subscribers, len = 1, .var.name = "notify_subscribers")
+  assert_logical(open_url, len = 1, .var.name = "open_url")
+
+  if (!file.exists(file)) {
+    abort("File does not exist",
+      file_path = file,
+      class = "tuber_file_not_found"
+    )
+  }
+
+  # Validate optional parameters
+  if (!is.null(snippet)) {
+    assert_list(snippet, .var.name = "snippet")
+  }
+  if (!is.null(status)) {
+    assert_list(status, .var.name = "status")
+  }
+  if (!is.null(on_behalf_of_content_owner)) {
+    assert_character(
+      on_behalf_of_content_owner,
+      len = 1,
+      min.chars = 1,
+      .var.name = "on_behalf_of_content_owner"
+    )
+  }
+  if (!is.null(content_owner_channel_id)) {
+    assert_character(
+      content_owner_channel_id,
+      len = 1,
+      min.chars = 1,
+      .var.name = "content_owner_channel_id"
+    )
+  }
+  if (xor(
+    is.null(on_behalf_of_content_owner),
+    is.null(content_owner_channel_id)
+  )) {
+    abort(
+      "Content-owner uploads require both content-owner arguments.",
+      class = "tuber_conflicting_parameters"
+    )
+  }
   if ("privacyStatus" %in% names(status)) {
-    p <- status$privacyStatus
-    p <- match.arg(p, choices = c("private", "public", "unlisted"))
+    status$privacyStatus <- match.arg(
+      status$privacyStatus,
+      choices = c("private", "public", "unlisted")
+    )
   }
 
   if ("license" %in% names(status)) {
-    p <- status$license
-    p <- match.arg(p, choices = c("creativeCommon", "youtube"))
+    status$license <- match.arg(
+      status$license,
+      choices = c("creativeCommon", "youtube")
+    )
   }
 
   if ("tags" %in% names(snippet)) {
@@ -63,9 +117,6 @@ upload_video <- function(
     snippet$tags <- tags
   }
 
-  metadata <- tempfile()
-  body <- list()
-
   if (length(snippet) == 0) {
     snippet <- NULL
   }
@@ -74,47 +125,56 @@ upload_video <- function(
     status <- NULL
   }
 
-  body$snippet <- snippet
-  body$status <- status
-
-  part <- paste(names(body), collapse = ",")
-
-  query <- as.list(query)
-  query$part <- part
-
-  body <- jsonlite::toJSON(body, auto_unbox = TRUE)
-  writeLines(body, metadata)
-
-  body <- list(
-    metadata = upload_file(metadata, type = "application/json; charset=UTF-8"),
-    y = httr::upload_file(file))
-
-  yt_check_token()
-
-  req <- httr::POST("https://www.googleapis.com/upload/youtube/v3/videos",
-                    body = body, query = query,
-                    config(token = getOption("google_token")),
-                    ...)
-
-  if (httr::status_code(req) > 300)  {
-    print(body)
-    print(paste0("File is: ", metadata))
-    cat(readLines(metadata))
-    cat("\n")
-    print(query)
-    print(httr::content(req)$error)
-    stop("Request was bad")
+  metadata <- Filter(Negate(is.null), list(snippet = snippet, status = status))
+  if (length(metadata) == 0) {
+    abort(
+      "At least one of `snippet` or `status` must contain video metadata.",
+      class = "tuber_missing_video_metadata"
+    )
   }
 
-  tuber_check(req)
+  part <- paste(names(metadata), collapse = ",")
+  query <- list(
+    uploadType = "resumable",
+    part = part,
+    notifySubscribers = tolower(as.character(notify_subscribers))
+  )
+  if (!is.null(on_behalf_of_content_owner)) {
+    query$onBehalfOfContentOwner <- on_behalf_of_content_owner
+    query$onBehalfOfContentOwnerChannel <- content_owner_channel_id
+  }
+  video_type <- guess_type(file, empty = "application/octet-stream")
 
-  res <- content(req)
+  yt_check_token()
+  track_quota_usage("videos", "insert")
+
+  upload_url <- tuber_upload_session(
+    "videos",
+    query = query,
+    metadata = metadata,
+    file = file,
+    type = video_type
+  )
+
+  upload_req <- tuber_upload_body(upload_url, file, video_type)
+
+  if (resp_status(upload_req) < 200 || resp_status(upload_req) >= 300) {
+    tuber_check(upload_req)
+    abort("Failed to upload video",
+      status_code = resp_status(upload_req),
+      class = "tuber_video_upload_failed"
+    )
+  }
+
+  res <- tuber_json(upload_req)
   url <- paste0("https://www.youtube.com/watch?v=", res$id)
 
   if (open_url) {
     browseURL(url)
   }
 
-  list(request = req, content = res,
-       url = url)
+  list(
+    request = upload_req, content = res,
+    url = url
+  )
 }

@@ -9,3 +9,17 @@ vignettes/.httr-oauth
 doc
 Meta
 .lintr_cache
+.DS_Store
+tuber.Rcheck/
+tuber*.tar.gz
+tuber*.tgz
+.Rapp.history
+/doc/
+/Meta/
+/..Rcheck
+
+# Generated vignette figures
+vignettes/figure/
+figure/
+/docs/deps
+/docs/deps

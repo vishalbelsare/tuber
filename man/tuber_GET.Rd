@@ -4,14 +4,33 @@
 \alias{tuber_GET}
 \title{GET}
 \usage{
-tuber_GET(path, query, ...)
+tuber_GET(
+  path,
+  query,
+  auth = "token",
+  use_cache = TRUE,
+  cache_ttl = NULL,
+  force_refresh = FALSE,
+  ...
+)
 }
 \arguments{
 \item{path}{path to specific API request URL}
 
 \item{query}{query list}
 
-\item{\dots}{Additional arguments passed to \code{\link[httr]{GET}}.}
+\item{auth}{A character vector of the authentication method, either "token" (the default) or
+"key"}
+
+\item{use_cache}{Logical. Whether eligible responses may be served from and
+stored in the tuber cache.}
+
+\item{cache_ttl}{Optional cache lifetime in seconds.}
+
+\item{force_refresh}{Logical. Ignore a cached response and refresh it.}
+
+\item{\dots}{Ignored; retained so callers that forwarded httr configuration
+keep working.}
 }
 \value{
 list
@@ -19,3 +38,4 @@ list
 \description{
 GET
 }
+\keyword{internal}

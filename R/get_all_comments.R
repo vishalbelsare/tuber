@@ -1,97 +1,136 @@
-#' Get all the comments for a video including replies
+#' Get All Video Comments, Including Replies
 #'
-#' @param video_id string; Required.
-#' \code{video_id}: video ID.
+#' Retrieves top-level comments and, when a thread response contains only a
+#' reply preview, follows `comments.list` pagination to retrieve the remaining
+#' replies.
 #'
-#' @param \dots Additional arguments passed to \code{\link{tuber_GET}}.
+#' @param video_id Video ID.
+#' @param max_results Optional maximum total number of comments and replies.
+#' `NULL` retrieves all available comments.
+#' @param auth Authentication method, `"key"` or `"token"`.
+#' @param ... Additional arguments passed to [tuber_GET()].
 #'
-#' @return
-#' a \code{data.frame} with the following columns:
-#' \code{authorDisplayName, authorProfileImageUrl, authorChannelUrl,}
-#' \code{ authorChannelId.value, videoId, textDisplay,
-#' canRate, viewerRating, likeCount, publishedAt, updatedAt,
-#' id, moderationStatus, parentId}
-#'
+#' @return A data frame with one row per top-level comment or reply and
+#' snake-case column names.
 #' @export
-#' @references \url{https://developers.google.com/youtube/v3/docs/commentThreads/list}
-#'
+#' @references
+#' \url{https://developers.google.com/youtube/v3/docs/commentThreads/list}
+#' \url{https://developers.google.com/youtube/v3/docs/comments/list}
 #' @examples
 #' \dontrun{
-#'
-#' # Set API token via yt_oauth() first
-#'
-#' get_all_comments(video_id = "a-UQz7fqR3w")
+#' get_all_comments("a-UQz7fqR3w", max_results = 100)
 #' }
+get_all_comments <- function(video_id,
+                             max_results = NULL,
+                             auth = "key",
+                             ...) {
+  assert_string(video_id, min.chars = 1, .var.name = "video_id")
+  if (!is.null(max_results)) {
+    assert_integerish(max_results, len = 1, lower = 1, .var.name = "max_results")
+  }
+  assert_choice(auth, c("key", "token"), .var.name = "auth")
 
-get_all_comments <- function(video_id = NULL, ...) {
+  thread_limit <- max_results %||% .Machine$integer.max
+  threads <- tryCatch(
+    list_comment_threads(
+      video_id = video_id,
+      part = c("id", "replies", "snippet"),
+      max_results = thread_limit,
+      simplify = FALSE,
+      auth = auth,
+      ...
+    ),
+    error = function(error) {
+      if (grepl("disabled", error$message, ignore.case = TRUE)) {
+        warn(
+          "Comments appear to be disabled for this video.",
+          video_id = video_id,
+          class = "tuber_comments_disabled"
+        )
+        return(NULL)
+      }
+      abort(
+        "Unable to retrieve comments for this video.",
+        video_id = video_id,
+        parent = error,
+        class = "tuber_comment_fetch_error"
+      )
+    }
+  )
 
-  querylist <- list(videoId = video_id, part = "id,replies,snippet", maxResults = 100)
-
-  res <- tuber_GET("commentThreads", querylist, ...)
-
-  agg_res <- process_page(res)
-
-  page_token  <- res$nextPageToken
-
-  while (is.character(page_token)) {
-
-    querylist$pageToken <- page_token
-    a_res <- tuber_GET("commentThreads", querylist, ...)
-    agg_res <- rbind(agg_res, process_page(a_res), stringsAsFactors = FALSE)
-
-    page_token  <- a_res$nextPageToken
-   }
-
-  agg_res
-}
-
-process_page <- function(res = NULL) {
-
-  simple_res  <- lapply(res$items, function(x) {
-                                     unlist(x$snippet$topLevelComment$snippet)
-                                     }
-                                     )
-
-  agg_res <- map_df(simple_res, bind_rows)
-  agg_res <- cbind(agg_res, id = sapply(res$items, `[[`, "id"),
-                            stringsAsFactors = FALSE)
-
-  agg_res$parentId <- NA
-
-  if (!("moderationStatus" %in% names(agg_res))) {
-    agg_res$moderationStatus <- NA
+  if (is.null(threads) || length(threads$items %||% list()) == 0) {
+    warn("No comments found for video.", video_id = video_id, class = "tuber_no_comments")
+    return(add_tuber_attributes(
+      empty_comment_frame(),
+      api_calls_made = attr(threads, "tuber_api_calls") %||% 0,
+      function_name = "get_all_comments",
+      results_found = 0,
+      response_format = "data.frame"
+    ))
   }
 
-  n_replies   <- sapply(res$items, function(x) {
-                                     unlist(x$snippet$totalReplyCount)
-                                     }
-                                     )
+  rows <- list()
+  api_calls <- attr(threads, "tuber_api_calls") %||% 1L
+  reached_limit <- function() {
+    !is.null(max_results) && length(rows) >= max_results
+  }
 
-  for (i in seq_len(n_replies)) {
+  for (thread in threads$items) {
+    if (reached_limit()) break
 
-    if (n_replies[i] == 1) {
+    top_level <- thread$snippet$topLevelComment %||% list()
+    comment_id <- top_level$id %||% NA_character_
+    rows[[length(rows) + 1L]] <- build_comment_row(
+      top_level$snippet %||% list(),
+      comment_id
+    )
+    if (reached_limit()) break
 
-      replies_1  <- lapply(res$items[[i]]$replies$comments,
-                                  function(x) c(unlist(x$snippet), id = x$id))
-      replies_1  <- map_df(replies_1, bind_rows)
+    total_replies <- as.integer(thread$snippet$totalReplyCount %||% 0L)
+    included_replies <- thread$replies$comments %||% list()
+    replies <- included_replies
 
-      if (nrow(replies_1) > 0 & ! ("moderationStatus" %in% names(replies_1))) {
-        replies_1$moderationStatus <- NA
+    if (total_replies > length(included_replies)) {
+      remaining <- if (is.null(max_results)) {
+        total_replies
+      } else {
+        min(total_replies, max_results - length(rows))
       }
-      agg_res    <- rbind(agg_res, replies_1, stringsAsFactors = FALSE)
+      if (remaining > 0) {
+        reply_response <- list_comments(
+          parent_id = comment_id,
+          max_results = remaining,
+          simplify = FALSE,
+          auth = auth,
+          ...
+        )
+        replies <- reply_response$items %||% list()
+        api_calls <- api_calls + (attr(reply_response, "tuber_api_calls") %||% 1L)
+      }
     }
 
-    if (n_replies[i] > 1) {
-
-      replies_1p  <- lapply(res$items[[i]]$replies$comments,
-                                    function(x) c(unlist(x$snippet), id = x$id))
-      replies_1p  <- map_df(replies_1p, bind_rows)
-
-      if (nrow(replies_1p) > 0 & ! ("moderationStatus" %in% names(replies_1p))) {
-        replies_1p$moderationStatus <- NA
-      }
-      agg_res     <- rbind(agg_res, replies_1p, stringsAsFactors = FALSE)
+    seen_reply_ids <- character()
+    for (reply in replies) {
+      if (reached_limit()) break
+      reply_id <- reply$id %||% NA_character_
+      if (!is.na(reply_id) && reply_id %in% seen_reply_ids) next
+      seen_reply_ids <- c(seen_reply_ids, reply_id)
+      rows[[length(rows) + 1L]] <- build_comment_row(
+        reply$snippet %||% list(),
+        reply_id,
+        parent_id = comment_id
+      )
     }
   }
-  agg_res
+
+  result <- if (length(rows) == 0) empty_comment_frame() else bind_rows(rows)
+  add_tuber_attributes(
+    result,
+    api_calls_made = api_calls,
+    function_name = "get_all_comments",
+    parameters = list(video_id = video_id, max_results = max_results),
+    results_found = nrow(result),
+    includes_replies = TRUE,
+    response_format = "data.frame"
+  )
 }

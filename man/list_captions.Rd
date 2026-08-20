@@ -2,28 +2,42 @@
 % Please edit documentation in R/list_captions.R
 \name{list_captions}
 \alias{list_captions}
-\title{Upload Video to Youtube}
+\title{List Caption Tracks}
 \usage{
-list_captions(video_id, query = NULL, ...)
+list_captions(
+  video_id,
+  caption_ids = NULL,
+  part = "snippet",
+  simplify = TRUE,
+  ...
+)
 }
 \arguments{
-\item{video_id}{ID of the YouTube video}
+\item{video_id}{YouTube video ID.}
 
-\item{query}{Fields for `query` in `GET`}
+\item{caption_ids}{Optional character vector of caption-track IDs to select.}
 
-\item{...}{Additional arguments to send to \code{\link{tuber_GET}} and
-therefore \code{\link{GET}}}
+\item{part}{Character vector of caption resource parts.}
+
+\item{simplify}{If `TRUE`, return a data frame; otherwise return the raw API
+response.}
+
+\item{...}{Additional arguments passed to [tuber_GET()].}
 }
 \value{
-A list of the response object from the \code{GET} and content
-about captions
+A data frame when `simplify = TRUE`; otherwise a caption-list
+response.
 }
 \description{
-Upload Video to Youtube
+Lists caption-track metadata for a video. The caption text itself is
+returned by [download_caption()]. YouTube requires OAuth authorization for
+this method.
 }
 \examples{
 \dontrun{
-video_id <- "M7FIvfx5J10"
-list_captions(video_id)
+list_captions(video_id = "M7FIvfx5J10")
 }
+}
+\references{
+\url{https://developers.google.com/youtube/v3/docs/captions/list}
 }

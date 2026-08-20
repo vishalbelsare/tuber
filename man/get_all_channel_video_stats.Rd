@@ -4,33 +4,40 @@
 \alias{get_all_channel_video_stats}
 \title{Get statistics on all the videos in a Channel}
 \usage{
-get_all_channel_video_stats(channel_id = NULL, mine = FALSE, ...)
+get_all_channel_video_stats(
+  channel_id = NULL,
+  mine = FALSE,
+  auth = if (mine) "token" else "key",
+  ...
+)
 }
 \arguments{
 \item{channel_id}{Character. Id of the channel}
 
 \item{mine}{Boolean. TRUE if you want to fetch stats of your own channel. Default is FALSE.}
 
+\item{auth}{Authentication method, `"key"` or `"token"`. `mine = TRUE`
+requires OAuth.}
+
 \item{\dots}{Additional arguments passed to \code{\link{tuber_GET}}.}
 }
 \value{
-nested named list with top element names:
-\code{kind, etag, id,}
-\code{snippet (list of details of the channel including title)}
-\code{, statistics (list of 5)}
+A \code{data.frame} containing video metadata along with view, like,
+  dislike and comment counts.
 
 If the \code{channel_id} is mistyped or there is no information, an empty list is returned
 }
 \description{
-Get statistics on all the videos in a Channel
+Efficiently collects all video IDs from a channel's uploads playlist, then
+fetches statistics and details using batch processing for optimal API quota usage.
 }
 \examples{
 \dontrun{
 
 # Set API token via yt_oauth() first
 
-get_all_channel_video_stats(channel_id="UCxOhDvtaoXDAB336AolWs3A")
-get_all_channel_video_stats(channel_id="UCMtFAi84ehTSYSE9Xo") # Incorrect channel ID
+get_all_channel_video_stats(channel_id = "UCxOhDvtaoXDAB336AolWs3A")
+get_all_channel_video_stats(channel_id = "UCMtFAi84ehTSYSE9Xo") # Incorrect channel ID
 }
 }
 \references{

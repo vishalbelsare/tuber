@@ -1,85 +1,124 @@
-#' Upload Video Caption to Youtube
+#' Upload a Caption Track
 #'
-#' @param file Filename of the caption, probably `.srt`
-#' @param video_id YouTube Video ID.  Try \code{\link{list_my_videos}} for examples.
-#' @param caption_name character vector of the name for the caption.
-#' @param is_draft logical indicating whether the caption track is a draft.
-#' @param query Fields for `query` in `POST`
-#' @param ... Additional arguments to send to \code{\link{POST}}
-#' @param open_url Should the video be opened using \code{\link{browseURL}}
-#' @param language character string of `BCP47` language type.
-#' See \url{http://www.rfc-editor.org/rfc/bcp/bcp47.txt} for language specification
+#' Uploads a timed caption file using YouTube's resumable media-upload
+#' protocol. The request requires OAuth 2.0 authorization.
 #'
-#' @note See
-#' \url{https://developers.google.com/youtube/v3/docs/captions#resource} for
-#' full specification
-#' @return A list of the response object from the \code{POST}, content,
-#' and the URL of the video
+#' @param file Path to a caption file containing timing information.
+#' @param video_id YouTube video ID.
+#' @param caption_name Name of the caption track. YouTube limits names to 150
+#'   characters.
+#' @param language BCP 47 language tag for the caption track.
+#' @param is_draft Whether the caption track should remain a draft.
+#' @param on_behalf_of_content_owner Optional YouTube content-owner ID. This is
+#'   only available to authorized YouTube content partners.
+#' @param open_url Whether to open the video's YouTube URL after a successful
+#'   upload.
+#' @param ... Ignored; retained for backward compatibility.
+#'
+#' @return A list containing the final HTTP response, parsed caption resource,
+#'   and video URL.
 #' @export
 #'
-#' @examples \dontrun{
-#' xx = list_my_videos()
-#' video_id = xx$contentDetails.videoId[1]
-#' video_id = as.character(video_id)
-#' language = "en-US"
+#' @references
+#' <https://developers.google.com/youtube/v3/docs/captions/insert>
+#'
+#' @examples
+#' \dontrun{
+#' upload_caption(
+#'   file = "captions.vtt",
+#'   video_id = "dQw4w9WgXcQ",
+#'   caption_name = "English"
+#' )
 #' }
 upload_caption <- function(
   file,
   video_id,
-  language = "en-US",
   caption_name,
+  language = "en-US",
   is_draft = FALSE,
-  query = NULL,
+  on_behalf_of_content_owner = NULL,
   open_url = FALSE,
   ...
 ) {
-
-  snippet <- list(
-    videoId = as.character(video_id)
+  assert_character(file, len = 1, min.chars = 1, .var.name = "file")
+  assert_character(video_id, len = 1, min.chars = 1, .var.name = "video_id")
+  assert_character(
+    caption_name,
+    len = 1,
+    min.chars = 1,
+    max.chars = 150,
+    .var.name = "caption_name"
   )
-  snippet$language <- language
-  snippet$name <- caption_name
-  snippet$isDraft <- is_draft
+  assert_character(language, len = 1, min.chars = 1, .var.name = "language")
+  assert_logical(is_draft, len = 1, .var.name = "is_draft")
+  assert_logical(open_url, len = 1, .var.name = "open_url")
+  if (!is.null(on_behalf_of_content_owner)) {
+    assert_character(
+      on_behalf_of_content_owner,
+      len = 1,
+      min.chars = 1,
+      .var.name = "on_behalf_of_content_owner"
+    )
+  }
 
-  metadata <- tempfile()
+  if (!file.exists(file)) {
+    abort(
+      "Caption file does not exist",
+      file_path = file,
+      class = "tuber_file_not_found"
+    )
+  }
+  if (file.size(file) > 100 * 1024^2) {
+    abort(
+      "Caption file exceeds YouTube's 100 MB limit",
+      file_path = file,
+      class = "tuber_file_too_large"
+    )
+  }
+  if (!grepl("^[A-Za-z0-9_-]{11}$", video_id)) {
+    abort(
+      "Invalid YouTube video ID format",
+      video_id = video_id,
+      class = "tuber_invalid_video_id"
+    )
+  }
 
-  body <- list()
-  body$snippet <- snippet
-  part <- paste(names(body), collapse = ",")
-
-  query <- as.list(query)
-  query$part <- part
-
-  body <- jsonlite::toJSON(body, auto_unbox = TRUE)
-  writeLines(body, metadata)
-
-  body <- list(
-    metadata = upload_file(metadata, type = "application/json; charset=UTF-8"),
-    y = httr::upload_file(file, type = "*/*"))
-
-
+  metadata <- list(snippet = list(
+    videoId = video_id,
+    language = language,
+    name = caption_name,
+    isDraft = is_draft
+  ))
+  query <- list(uploadType = "resumable", part = "snippet")
+  if (!is.null(on_behalf_of_content_owner)) {
+    query$onBehalfOfContentOwner <- on_behalf_of_content_owner
+  }
+  caption_type <- guess_type(file, empty = "application/octet-stream")
 
   yt_check_token()
-  # need diff from regular tuber_POST because of upload/
-  req <- httr::POST("https://www.googleapis.com/upload/youtube/v3/captions",
-                    body = body, query = query,
-                    config(token = getOption("google_token")),
-                    ...)
-  if (httr::status_code(req) > 300)  {
-    print(body)
-    print(paste0("File is: ", metadata))
-    cat(readLines(metadata))
-    cat("\n")
-    print(query)
-    print(httr::content(req)$error)
-    stop("Request was bad")
+  track_quota_usage("captions", "insert")
+
+  upload_url <- tuber_upload_session(
+    "captions",
+    query = query,
+    metadata = metadata,
+    file = file,
+    type = caption_type
+  )
+
+  upload_req <- tuber_upload_body(upload_url, file, caption_type)
+  tuber_check(upload_req)
+  if (resp_status(upload_req) < 200 || resp_status(upload_req) >= 300) {
+    abort(
+      "Failed to upload caption",
+      status_code = resp_status(upload_req),
+      class = "tuber_caption_upload_failed"
+    )
   }
-  tuber_check(req)
-  res <- content(req)
+
+  result <- tuber_json(upload_req)
   url <- paste0("https://www.youtube.com/watch?v=", video_id)
-  if (open_url) {
-    browseURL(url)
-  }
-  list(request = req, content = res,
-       url = url)
+  if (open_url) browseURL(url)
+
+  list(request = upload_req, content = result, url = url)
 }

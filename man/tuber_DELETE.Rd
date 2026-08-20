@@ -11,7 +11,7 @@ tuber_DELETE(path, query, ...)
 
 \item{query}{query list}
 
-\item{\dots}{Additional arguments passed to \code{\link[httr]{GET}}.}
+\item{\dots}{Ignored; see [tuber_POST_json()].}
 }
 \value{
 list
@@ -19,3 +19,4 @@ list
 \description{
 DELETE
 }
+\keyword{internal}
